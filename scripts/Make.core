@@ -1,0 +1,74 @@
+#!/usr/bin/make -f
+
+VNC_EXIST = $(shell $(SSH) $(USER)@$(TARGET) 'ps -ef | grep Xtightvnc | grep :$(DISPLAY) | grep -v grep | wc -l')
+VNC_LIST  = $(shell $(SSH) $(USER)@$(TARGET) "ps -ef | grep Xtightvnc | grep -v grep | grep -v sed | sed 's/.*Xtightvnc/\\\nDISPLAY/' | sed 's/-depth.*//' | sed 's/-desk.*Xauthority//' | sed 's/-//' | column -t -c 4")
+
+SSH_TUNNELING_PROCESS_ID = $(shell pgrep -f "ssh -f")
+
+all : vnc screen  ## Create VNC Server and Connect to Screen Sharing
+
+ssh_gen_key:  ## Generate SSH key for ssh connection.
+	$(SSH_GEN) -t rsa
+
+ssh_add_key_to_server:  ## Add generated key to server for easier connection.
+	$(SSH_COPY) $(USER)@$(TARGET)
+
+connect:  ## Connect through SSH.
+	@echo "#### Make Connection... ####"
+	@$(SSH) $(USER)@$(TARGET)
+
+list_vnc:  ## List all opened VNC Sessions
+	@echo "#### List VNC Server... ####"
+	$(if $(VNC_LIST), \
+		@echo "$(VNC_LIST)", \
+		@echo "No opened VNC Session")
+
+vnc:  ## Establish VNC session if it does not already exist.
+	@echo "#### Define VNC Server... ####"
+	$(if $(filter $(VNC_EXIST),1), \
+		@echo "VNC Session Already Exists at :$(DISPLAY) => Connection will be established", \
+		@$(SSH) $(USER)@$(TARGET) '$(VNC) -geometry $(GEOMETRY) :$(DISPLAY) -localhost -nolisten tcp')
+
+screen:  ## Connect to Screen Sharing.
+	@echo "#### Open Screen Sharing... ####"
+	@ssh -f -N -L $(LISTEN_PORT):localhost:$(HOST_PORT) $(USER)@$(TARGET)
+	@open vnc://localhost:$(LISTEN_PORT)
+
+get_all_ssh_process:  ## Get all SSH process to kill SSH tunneling
+	@echo  $(shell pgrep -fl "ssh")
+	
+kill_ssh_tunnel:  ## Kill all SSH process used in screen to create SSH tunnel
+	@echo "#### Clean SSH tunneling process... ####"
+	$(if $(SSH_TUNNELING_PROCESS_ID), \
+		@kill $(SSH_TUNNELING_PROCESS_ID), \
+		@echo "No process to kill")
+	
+mount:  ## Mount Volume.
+	@$(SSH_MOUNT) $(USER)@$(TARGET): $(VOL_MOUNT)
+
+unmount:  ## Unmount Volume.
+	@umount $(VOL_MOUNT) 2>/dev/null; true
+
+shutdown: unmount  ## Shutdown Raspberry Pi.
+	@echo "#### Shut Down Raspberry Pi... ####"
+	@while [ -z "$$CONTINUE" ]; do \
+		read -r -p "Are you sure you want to shutdown raspberry Pi ? [Y/n]" CONTINUE; \
+	done ; \
+	[ $$CONTINUE = "y" ] || [ $$CONTINUE = "Y" ] || (echo "Exiting."; exit 1;)
+	@$(SSH) $(USER)@$(TARGET) 'sudo shutdown -h -P now' 2>/dev/null; true
+
+help:  ## Show this help.
+	@echo 'usage: make [target] [Optional: USER | TARGET | GEOMETRY | DISPLAY]...'
+	@echo ''
+	@echo 'targets:'
+	@echo '--------'
+	@egrep '^(.+)\:\ .*##\ (.+)' ${MAKEFILE_LIST} | sed 's/.*core://' | sed 's/:.*##/#/' | column -t -c 2 -s '#'
+	@echo '--------'
+	
+clean: kill_ssh_tunnel  ## Clean the VNC server Session with from Makefile DISPLAY variable.
+	@echo "#### Clean VNC Session... ####"
+	@while [ -z "$$CONTINUE" ]; do \
+		read -r -p "You are about to kill VNC Session at display :$(DISPLAY) ? [Y/n]" CONTINUE; \
+	done ; \
+	[ $$CONTINUE = "y" ] || [ $$CONTINUE = "Y" ] || (echo "Exiting."; exit 1;)
+	@$(SSH) $(USER)@$(TARGET) '$(VNC) -kill :$(DISPLAY)'
